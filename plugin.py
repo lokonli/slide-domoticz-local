@@ -297,7 +297,8 @@ class IimSlideLocal:
                 # find first free unit
                 units = list(range(1, len(Devices)+2))
                 for device in Devices:
-                    units.remove(device)
+                    if device in units:
+                        units.remove(device)
                 unit = min(units)
 
                 myDev = Domoticz.Device(Name=name, Unit=unit, DeviceID='{}'.format(
