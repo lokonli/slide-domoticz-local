@@ -20,6 +20,8 @@ The reset button is in the hole left of the power connector, when you have the o
 The LED, right of the power connector, will flash a few time to indicate your slide switched to local API mode<br/>
 <br/>
 
+Write down your device code. You need it during plugin configuration. The Device code are the 8 characters printed on top of your Slide.<br/>
+
 ## Installation
 
 Go to the Domoticz plugin folder.
@@ -39,7 +41,7 @@ Restart Domoticz:
 
 First activate 'Allow new devices' in Domoticz.
 
-Then add the slide-local hardware.
+Then add the slide-local hardware in Domoticz.
 
 The plugin uses two configuration fields:
 

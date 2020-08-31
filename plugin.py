@@ -19,6 +19,7 @@
         <br/>
 
         Don't forget to set 'Allow creation of new devices' in Domoticz first before enabling this plugin. <br/>
+        <br/>
          
         Slide IP addresses: 1 or more IP addresses, semicolon separated.<br/>
         Device codes: List of device codes, semicolon seperated. Number of codes must match number of IP addresses. Device code is printed on top of your Slide.<br/>
