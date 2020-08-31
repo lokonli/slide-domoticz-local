@@ -35,9 +35,11 @@ Restart Domoticz:
 
     sudo service domoticz restart
 
-In Domoticz, add the slide-local hardware.
-
 ## Plugin configuration
+
+First activate 'Allow new devices' in Domoticz.
+
+Then add the slide-local hardware.
 
 The plugin uses two configuration fields:
 
@@ -55,6 +57,7 @@ If you want to calibrate your slide go to the slide UI which can be found in the
 Wifi configuration for new slides.
 
 ## Links
+
 [Domoticz forum](https://www.domoticz.com/forum/viewtopic.php?f=65&t=30449)
 
 https://slide.store/

@@ -18,6 +18,8 @@
         The LED, right of the power connector, will flash a few time to indicate your slide switched to local API mode<br/>
         <br/>
 
+        Don't forget to set 'Allow creation of new devices' in Domoticz first before enabling this plugin. <br/>
+         
         Slide IP addresses: 1 or more IP addresses, semicolon separated.<br/>
         Device codes: List of device codes, semicolon seperated. Number of codes must match number of IP addresses. Device code is printed on top of your Slide.<br/>
 
