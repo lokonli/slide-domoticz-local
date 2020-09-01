@@ -7,13 +7,17 @@ This plugin uses the local API (beta).
 For a Domoticz plugin that uses the cloud API see:  
 http://github.com/lokonli/slide-domoticz
 
+**Note:**  
+You can't use local API and cloud API simultaneously!  
+If you activate the local API on your slide the Slide App won't work anymore.
+
 ## Version
 This is beta release 0.0.1. <br/>
 
 ## Slide setup
 First configure your slide using the Slide app for your own WiFi network.
 
-Enable local API on your slide by pressing the reset button twice within 0.5 sec.<br/>
+Switch to local API on your slide by pressing the reset button twice within 0.5 sec.<br/>
 
 
 The reset button is in the hole left of the power connector, when you have the orange slide label on top.<br/>
