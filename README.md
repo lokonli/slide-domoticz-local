@@ -7,7 +7,7 @@ This plugin uses the local API (beta).
 For a Domoticz plugin that uses the cloud API see:  
 http://github.com/lokonli/slide-domoticz
 
-**Note:**  
+:warning: **Note:**  
 You can't use local API and cloud API simultaneously!  
 If you activate the local API on your slide the Slide App won't work anymore.
 
@@ -60,8 +60,8 @@ If you want to calibrate your slide go to the slide UI which can be found in the
 
 ## Todo
 
-Wifi configuration for new slides.
-Auto slide discovery.
+* Wifi configuration for new slides.  
+* Auto slide discovery.
 
 ## Links
 
