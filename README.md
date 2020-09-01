@@ -61,6 +61,7 @@ If you want to calibrate your slide go to the slide UI which can be found in the
 ## Todo
 
 Wifi configuration for new slides.
+Auto slide discovery.
 
 ## Links
 
