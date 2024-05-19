@@ -71,14 +71,17 @@ class IimSlideLocal:
         Domoticz.Debug("onStart called")
         strVersion = Parameters['DomoticzVersion']
         Domoticz.Log('Version ' + strVersion)
-        x = re.search("(?<=build )\d+(?=\))", strVersion)
-        self.nVersion = 0
-        domoVersion = 0
-        if x:
-            domoVersion = int(x[0])
-        if domoVersion > 14560:
+        mainVersion = strVersion.split()[0]
+        if mainVersion>="2024.1":
             self.nVersion = 1
-            Domoticz.Debug('New version')
+        else:
+            x = re.search("(?<=build )\d+(?=\))", strVersion)
+            self.nVersion = 0
+            domoVersion = 0
+            if x:
+                domoVersion = int(x[0])
+            if domoVersion > 14560:
+                self.nVersion = 1
         Domoticz.Debug('Version ' + str(self.nVersion))
         self.hb = 1
         self.devices = []
