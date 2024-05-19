@@ -12,7 +12,7 @@ You can't use local API and cloud API simultaneously!
 If you activate the local API on your slide the Slide App won't work anymore.
 
 ## Version
-This is beta release 0.0.1. <br/>
+This is beta release 0.1.0. <br/>
 
 ## Slide setup
 First configure your slide using the Slide app for your own WiFi network.
@@ -57,6 +57,10 @@ Device codes: List of device codes, semicolon seperated. Number of codes must ma
 Slide devices will be created automatically.
 
 If you want to calibrate your slide go to the slide UI which can be found in the Custom->Slide screen in Domoticz.
+
+For some more information see the Wiki:
+
+https://github.com/lokonli/slide-domoticz-local/wiki
 
 ## Todo
 
