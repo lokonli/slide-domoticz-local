@@ -12,7 +12,7 @@ You can't use local API and cloud API simultaneously!
 If you activate the local API on your slide the Slide App won't work anymore.
 
 ## Version
-This is beta release 0.1.0. <br/>
+This is beta release 0.2.0. <br/>
 
 ## Slide setup
 First configure your slide using the Slide app for your own WiFi network.

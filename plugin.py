@@ -3,14 +3,14 @@
 # Author: lokonli
 #
 """
-<plugin key="iim-slide-local" name="Slide by Innovation in Motion - Local" author="lokonli" version="0.1.0" wikilink="https://github.com/lokonli/slide-domoticz-local" externallink="https://slide.store/">
+<plugin key="iim-slide-local" name="Slide by Innovation in Motion - Local" author="lokonli" version="0.2.0" wikilink="https://github.com/lokonli/slide-domoticz-local" externallink="https://slide.store/">
     <description>
         <h2>Slide by Innovation in Motion</h2><br/>
         Plugin for Slide by Innovation in Motion.<br/>
         <br/>
         It uses the Innovation in Motion local API.<br/>
         <br/>
-        This is beta release 0.1.0. <br/>
+        This is beta release 0.2.0. <br/>
         <br/>
         <h3>Configuration</h3>
         Enable local API by pressing the reset button twice within 0.5 sec.<br/>
@@ -133,7 +133,6 @@ class IimSlideLocal:
     def connect(self, msg):
         Domoticz.Debug("connect called" + str(msg))
         self.messageActive = True
-        Domoticz.Debug(json.dumps(msg))
         address = msg["device"]["ip"]
         connectionName = 'Slide_'+address
 #        if connectionName not in self.connections:
