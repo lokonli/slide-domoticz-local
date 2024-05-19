@@ -3,14 +3,14 @@
 # Author: lokonli
 #
 """
-<plugin key="iim-slide-local" name="Slide by Innovation in Motion - Local" author="lokonli" version="0.1.0" wikilink="https://github.com/lokonli/slide-domoticz-local" externallink="https://slide.store/">
+<plugin key="iim-slide-local" name="Slide by Innovation in Motion - Local" author="lokonli" version="0.2.0" wikilink="https://github.com/lokonli/slide-domoticz-local" externallink="https://slide.store/">
     <description>
         <h2>Slide by Innovation in Motion</h2><br/>
         Plugin for Slide by Innovation in Motion.<br/>
         <br/>
         It uses the Innovation in Motion local API.<br/>
         <br/>
-        This is beta release 0.1.0. <br/>
+        This is beta release 0.2.0. <br/>
         <br/>
         <h3>Configuration</h3>
         Enable local API by pressing the reset button twice within 0.5 sec.<br/>
@@ -54,6 +54,7 @@ from hashlib import md5
 from shutil import copy2
 import os
 import os.path
+import re
 
 if False==True:
     Domoticz = {}
@@ -67,6 +68,19 @@ class IimSlideLocal:
         self._dateType = 0
 
     def onStart(self):
+        Domoticz.Debug("onStart called")
+        strVersion = Parameters['DomoticzVersion']
+        Domoticz.Log('Version ' + strVersion)
+        x = re.search("(?<=build )\d+(?=\))", strVersion)
+        self.nVersion = 0
+        domoVersion = 0
+        if x:
+            domoVersion = int(x[0])
+        if domoVersion > 14560:
+            self.nVersion = 1
+            Domoticz.Debug('New version')
+        Domoticz.Debug('Version ' + str(self.nVersion))
+        self.hb = 1
         self.devices = []
         self.deviceMap = {}
         self.messageQueue = []
@@ -78,7 +92,6 @@ class IimSlideLocal:
         if Parameters["Mode6"] != "0":
             Domoticz.Debugging(int(Parameters["Mode6"]))
             DumpConfigToLog()
-        Domoticz.Debug("onStart called")
         Domoticz.Debug("Homefolder: {}".format(Parameters["HomeFolder"]))
         Domoticz.Debug("Length {}".format(len(self.messageQueue)))
         Domoticz.Heartbeat(30)
@@ -97,7 +110,7 @@ class IimSlideLocal:
             return
 
         self.devices = [{'ip': ip, 'code': code, 'nonce': '', 'nc': 0,
-                         'checkMovement': 0} for ip, code in zip(ipList, codeList)]
+                         'checkMovement': 0, 'Conn': None} for ip, code in zip(ipList, codeList)]
 
         Domoticz.Debug(json.dumps(self.devices, indent=4))
         self.getAllSlidesInfo()
@@ -106,6 +119,7 @@ class IimSlideLocal:
         Domoticz.Debug("onStop called")
 
     def addMessageToQueue(self, cmd):
+        Domoticz.Debug("addMessageToQueue: " +str(cmd))
         cmd['authorizationError'] = False
         self.messageQueue.append(cmd)
         if not self.messageActive:
@@ -117,27 +131,46 @@ class IimSlideLocal:
         self.connect(self.messageQueue.pop(0))
 
     def connect(self, msg):
-        Domoticz.Debug("connect called")
+        Domoticz.Debug("connect called" + str(msg))
         self.messageActive = True
-        Domoticz.Debug(json.dumps(msg))
         address = msg["device"]["ip"]
-        connectionName = 'Slide_'+str(self.connectCount)
-        self.connectCount += 1
+        connectionName = 'Slide_'+address
+#        if connectionName not in self.connections:
+#            self.connections[connectionName] = []	# initialise the connections list that holds the commands
+#        self.connections[connectionName].append(msg)	# add the message to the list
         self.connections[connectionName] = msg
-        self.myConn = Domoticz.Connection(
-            Name=connectionName, Transport="TCP/IP", Protocol="HTTP", Address=address, Port="80")
-        self.myConn.Connect()
+        for dev in self.devices:
+            if dev['ip'] == address:
+                if dev['Conn'] == None:
+                    Domoticz.Debug("Creating connection for address " + address)
+                    dev['Conn'] = Domoticz.Connection(
+                        Name=connectionName, Transport="TCP/IP", Protocol="HTTP", Address=address, Port="80")
+                    dev['Conn'].Connect()
+                    return
+                else:
+                    if dev['Conn'].Connected() or dev['Conn'].Connecting():
+                        Domoticz.Debug("Connection (being) created " + address)
+                        return
+                    else:
+                        Domoticz.Debug("Connecting address " + address)
+                        dev['Conn'].Connect()
+                        return
+
+        Domoticz.Error("Error: connection for IP not found " + address)
 
     def onConnect(self, Connection, Status, Description):
-        Domoticz.Debug("onConnect called")
+        Domoticz.Debug("onConnect called: " + Connection.Address + " " + Connection.Name + " connected: " + str(Connection.Connected()) + " connecting: " + str(Connection.Connecting()))
+
         currentMessage = self.connections[Connection.Name] if Connection.Name in self.connections else None
+        Domoticz.Debug("onConnect message is: " + str(currentMessage))
 
         if (Status == 0):
-            Domoticz.Debug("Slide connected successfully.")
+            Domoticz.Debug("Slide connected successfully: "+Connection.Address+" "+Connection.Name)
         else:
             Domoticz.Error("Failed to connect ("+str(Status)+") to: " +
                            currentMessage["device"]["ip"]+" with error: "+Description)
             return
+
         if Connection.Name in self.connections:
             self.sendMessage(Connection)
         else:
@@ -146,6 +179,7 @@ class IimSlideLocal:
     def sendMessage(self, connection):
         Domoticz.Debug("sendMessage called")
         currentMessage = self.connections[connection.Name]
+        Domoticz.Debug("sendMessage currentMessage: " + str(currentMessage))
         _device = currentMessage["device"]
         username = 'user'
         realm = 'iim'
@@ -196,11 +230,11 @@ class IimSlideLocal:
         }
         delay = currentMessage["delay"] if 'delay' in currentMessage else 0
 
-        Domoticz.Debug(json.dumps(sendData))
+        Domoticz.Debug("Sending: "+json.dumps(sendData))
         connection.Send(sendData, delay)
 
     def onMessage(self, Connection, Data):
-        Domoticz.Debug("onMessage called")
+        Domoticz.Debug("onMessage called: "+Connection.Address+" "+Connection.Name)
         self.messageActive = False
         # DumpHTTPResponseToLog(Data)
         Response = {}
@@ -219,16 +253,16 @@ class IimSlideLocal:
         Domoticz.Debug(json.dumps(Response))
 
         if (Status == 200):
-            Domoticz.Debug("Good Response received from IIM")
+            Domoticz.Debug("Good Response received from IIM: "+Connection.Address+" "+Connection.Name)
             currentMessage['authorizationError'] = False
         elif (Status == 401):
-            Domoticz.Debug("Authorization error.")
+            Domoticz.Debug("Authorization error: "+Connection.Address+" "+Connection.Name)
             if currentMessage['authorizationError']:
                 Domoticz.Error("Digest Authorization error.")
                 currentMessage['authorizationError'] = False
             else:
                 currentMessage['authorizationError'] = True
-                Domoticz.Debug(json.dumps(Data))
+                Domoticz.Debug(Connection.Address+": "+json.dumps(Data))
                 Domoticz.Debug('Header: '+Data['Headers']['WWW-Authenticate'])
                 # after an Authorization Error we set nc to 0 to restart counting
                 currentMessage["device"]["nc"] = 0
@@ -238,7 +272,7 @@ class IimSlideLocal:
                 reg = re.compile('(\w+)[=] ?"?(\w+)"?')
 
                 authDict = dict(reg.findall(auth))
-                Domoticz.Debug(json.dumps(authDict))
+                Domoticz.Debug(Connection.Address+": "+json.dumps(authDict))
 
 #                self.currentMessage["device"]["nonce"]=authDict["nonce"]
                 currentMessage["device"]['nonce'] = authDict["nonce"]
@@ -281,8 +315,9 @@ class IimSlideLocal:
 
                 unit = findFirstFreeUnit()
 
+                switchType = 21 if self.nVersion>=1 else 13
                 myDev = Domoticz.Device(Name=name, Unit=unit, DeviceID='{}'.format(
-                    id), Type=244, Subtype=73, Switchtype=13, Used=1)
+                    id), Type=244, Subtype=73, Switchtype=switchType, Used=1)
                 myDev.Create()
                 self.setStatus(myDev, pos)
 
@@ -320,7 +355,8 @@ class IimSlideLocal:
 
     def getSlideInfo(self, device, delay=0):
         Domoticz.Debug('Get Slide info: ')
-        Domoticz.Debug(json.dumps(device))
+#        Domoticz.Debug(json.dumps(device))
+        Domoticz.Debug("getSLideInfo: "+str(device))
         cmd = {
             'device': device,
             'uri': '/rpc/Slide.GetInfo',
@@ -338,15 +374,17 @@ class IimSlideLocal:
         }
         self.addMessageToQueue(cmd)
 
-    def setStatus(self, device, invertedpos):
-        pos = 1 - invertedpos
+    def setStatus(self, device, pos):
         Domoticz.Debug("setStatus called with pos:" + str(pos))
         sValue = str(int(pos*100))
         nValue = 2
-        if pos < 0.13:
+#        if pos < 0.13:
+        nPos = 1- pos if self.nVersion >= 1 else pos
+        sValue = str(int(nPos*100))
+        if nPos < 0.13:
             nValue = 0
             sValue = '0'
-        if pos > 0.87:
+        if nPos > 0.87:
             nValue = 1
             sValue = '100'
         if(device.sValue != sValue):
@@ -356,6 +394,11 @@ class IimSlideLocal:
             return True
         else:
             return False
+# New Domoticz versions
+#- 0 = Blind Close in GUI/dzvents
+#- 100 = Blind Open in GUI/dzvents
+#- 90 = Show 90 in the GUI/dzvents, Send 90 to the device (Blind almost fully Open)
+#- 10 = Show 10 in the GUI/dzvents, Send 10 to the device (Blind almost fully Closed)
 
     def onCommand(self, Unit, Command, Level, Hue):
         Domoticz.Debug("onCommand called for Unit " + str(Unit) +
@@ -374,9 +417,7 @@ class IimSlideLocal:
                 Domoticz.Error('Unsupported command: ' + cmd)
                 return
             return
-        if (Command == 'Off'):
-            self.setPosition(Devices[Unit].DeviceID, 0)
-        if (Command == 'Close'):
+        if (Command == 'Off' or Command == 'Close'):
             self.setPosition(Devices[Unit].DeviceID, 0)
         if (Command == 'On'):
             if right(Devices[Unit].DeviceID,3)=='cal':
@@ -393,12 +434,14 @@ class IimSlideLocal:
 
     def setPosition(self, id, level):
         Domoticz.Debug("setPosition called")
+        Domoticz.Debug("Nversion "+ str(self.nVersion))
+        nLevel = 1-level if self.nVersion >= 1 else level
+        Domoticz.Debug("nLevel " + str(nLevel))
         device = self.getDevice(id)
-        invertedLevel = 1 - level
         if device == None:
             return
         sendData = {'uri': '/rpc/Slide.SetPos',
-                    'data': json.dumps({"pos": str(invertedLevel)}),
+                    'data': json.dumps({"pos": str(nLevel)}),
                     'device': device
                     }
         device["checkMovement"] = min(device["checkMovement"]+1, 2)
@@ -432,11 +475,15 @@ class IimSlideLocal:
                        "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile)
 
     def onDisconnect(self, Connection):
-        Domoticz.Debug("onDisconnect called")
+        Domoticz.Debug("onDisconnect called: "+Connection.Address)
 
     def onHeartbeat(self):
-        Domoticz.Debug("onHeartbeat called")
-        self.getAllSlidesInfo()
+        if self.hb == 180:
+            Domoticz.Debug("onHeartbeat called")
+            self.getAllSlidesInfo()
+            self.hb = 1
+        else:
+            self.hb = self.hb + 1
 
 
 global _plugin
