@@ -72,7 +72,7 @@ class IimSlideLocal:
         strVersion = Parameters['DomoticzVersion']
         Domoticz.Log('Version ' + strVersion)
         mainVersion = strVersion.split()[0]
-        if mainVersion>="2024.1":
+        if mainVersion>="2023.1":
             self.nVersion = 1
         else:
             x = re.search("(?<=build )\d+(?=\))", strVersion)
