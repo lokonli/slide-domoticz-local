@@ -17,7 +17,7 @@ This is beta release 0.3.1. <br/>
 ## Slide setup
 First configure your slide using the Slide app for your own WiFi network.
 
-Switch to local API on your slide by pressing the reset button twice within 0.5 sec.<br/>
+Switch to local API on your slide by pressing the [reset button](https://github.com/lokonli/slide-domoticz-local/wiki/Reset-button) twice within 0.5 sec.<br/>
 
 
 The reset button is in the hole left of the power connector, when you have the orange slide label on top.<br/>
