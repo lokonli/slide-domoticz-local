@@ -114,7 +114,7 @@ class IimSlideLocal:
                 'Number of Slide IPs and Slide Device codes do not match')
             return
         
-        self.hbCycles = max(int(Parameters['Mode4']),1)
+        self.hbCycles = 5 if len(Parameters['Mode4'])==0 else max(int(Parameters['Mode4']),1)
 
         self.devices = [{'ip': ip, 'code': code, 'nonce': '', 'nc': 0,
                          'checkMovement': 0, 'Conn': None} for ip, code in zip(ipList, codeList)]
@@ -201,9 +201,8 @@ class IimSlideLocal:
 
 
     def sendMessage(self, connection):
-        Domoticz.Debug("sendMessage called")
         currentMessage = self.connections[connection.Name]
-        Domoticz.Debug("sendMessage currentMessage: " + str(currentMessage))
+        Domoticz.Debug("sendMessagecalled. CurrentMessage: " + str(currentMessage))
         _device = currentMessage["device"]
         username = 'user'
         realm = 'iim'
