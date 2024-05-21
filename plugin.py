@@ -3,14 +3,14 @@
 # Author: lokonli
 #
 """
-<plugin key="iim-slide-local" name="Slide by Innovation in Motion - Local" author="lokonli" version="0.3.0" wikilink="https://github.com/lokonli/slide-domoticz-local" externallink="https://slide.store/">
+<plugin key="iim-slide-local" name="Slide by Innovation in Motion - Local" author="lokonli" version="0.3.1" wikilink="https://github.com/lokonli/slide-domoticz-local" externallink="https://slide.store/">
     <description>
         <h2>Slide by Innovation in Motion</h2><br/>
         Plugin for Slide by Innovation in Motion.<br/>
         <br/>
         It uses the Innovation in Motion local API.<br/>
         <br/>
-        This is beta release 0.3.0. <br/>
+        This is beta release 0.3.1. <br/>
         <br/>
         <h3>Configuration</h3>
         Enable local API by pressing the reset button twice within 0.5 sec.<br/>
