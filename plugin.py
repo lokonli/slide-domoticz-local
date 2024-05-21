@@ -3,14 +3,14 @@
 # Author: lokonli
 #
 """
-<plugin key="iim-slide-local" name="Slide by Innovation in Motion - Local" author="lokonli" version="0.2.0" wikilink="https://github.com/lokonli/slide-domoticz-local" externallink="https://slide.store/">
+<plugin key="iim-slide-local" name="Slide by Innovation in Motion - Local" author="lokonli" version="0.3.0" wikilink="https://github.com/lokonli/slide-domoticz-local" externallink="https://slide.store/">
     <description>
         <h2>Slide by Innovation in Motion</h2><br/>
         Plugin for Slide by Innovation in Motion.<br/>
         <br/>
         It uses the Innovation in Motion local API.<br/>
         <br/>
-        This is beta release 0.2.0. <br/>
+        This is beta release 0.3.0. <br/>
         <br/>
         <h3>Configuration</h3>
         Enable local API by pressing the reset button twice within 0.5 sec.<br/>
@@ -30,6 +30,7 @@
     <params>
            <param field="Mode2" label="Slide IP address(es)" width="200px" required="true" default="192.168.178.47"/>
            <param field="Mode3" label="Device code(s)" width="200px" required="true" default="a1b2c3d4"/>
+           <param field="Mode4" label="Refresh time (minutes)" width="200px" required="true" default="5"/>
            <param field="Mode6" label="Debug" width="150px">
                 <options>
                     <option label="None" value="0"  default="true" />
@@ -84,11 +85,12 @@ class IimSlideLocal:
                 self.nVersion = 1
         Domoticz.Debug('Version ' + str(self.nVersion))
         self.hb = 1
+        self.hbCycles = 5
         self.devices = []
         self.deviceMap = {}
         self.messageQueue = []
         self.connections = {}
-        self.connectCount = 0
+        self.msgCount = 0
         self.messageActive = False
         self._tick = 0
         self._dateType = 0
@@ -97,7 +99,7 @@ class IimSlideLocal:
             DumpConfigToLog()
         Domoticz.Debug("Homefolder: {}".format(Parameters["HomeFolder"]))
         Domoticz.Debug("Length {}".format(len(self.messageQueue)))
-        Domoticz.Heartbeat(30)
+        Domoticz.Heartbeat(60)
         self.initialize()
 
     def initialize(self):
@@ -111,6 +113,8 @@ class IimSlideLocal:
             Domoticz.Error(
                 'Number of Slide IPs and Slide Device codes do not match')
             return
+        
+        self.hbCycles = max(int(Parameters['Mode4']),1)
 
         self.devices = [{'ip': ip, 'code': code, 'nonce': '', 'nc': 0,
                          'checkMovement': 0, 'Conn': None} for ip, code in zip(ipList, codeList)]
@@ -127,6 +131,9 @@ class IimSlideLocal:
         self.messageQueue.append(cmd)
         if not self.messageActive:
             self.sendMessageFromQueue()
+        else:
+            Domoticz.Debug("Sending postponed, queue len: " + str(len(self.messageQueue)))
+
 
     def sendMessageFromQueue(self):
         if len(self.messageQueue) == 0:
@@ -137,11 +144,18 @@ class IimSlideLocal:
         Domoticz.Debug("connect called" + str(msg))
         self.messageActive = True
         address = msg["device"]["ip"]
-        connectionName = 'Slide_'+address
+        self.msgCount = self.msgCount + 1 if self.msgCount < 9999 else 0
+        
+        connectionName = 'Slide_'+address+'_'+str(self.msgCount)
 #        if connectionName not in self.connections:
 #            self.connections[connectionName] = []	# initialise the connections list that holds the commands
 #        self.connections[connectionName].append(msg)	# add the message to the list
         self.connections[connectionName] = msg
+        self.connection = Domoticz.Connection(
+            Name=connectionName, Transport="TCP/IP", Protocol="HTTP", Address=address, Port="80")
+        self.connection.Connect(Timeout=1000)
+        return
+
         for dev in self.devices:
             if dev['ip'] == address:
                 if dev['Conn'] == None:
@@ -178,6 +192,13 @@ class IimSlideLocal:
             self.sendMessage(Connection)
         else:
             Domoticz.Error('Connection without info')
+    
+    def onTimeout(self, Connection):
+        Domoticz.Debug("Timeout for: "+Connection.Name)
+        self.messageActive = False
+        self.connections.pop(Connection.Name, None)
+        self.sendMessageFromQueue()
+
 
     def sendMessage(self, connection):
         Domoticz.Debug("sendMessage called")
@@ -238,7 +259,7 @@ class IimSlideLocal:
 
     def onMessage(self, Connection, Data):
         Domoticz.Debug("onMessage called: "+Connection.Address+" "+Connection.Name)
-        self.messageActive = False
+        # self.messageActive = False # not here, but in disconnect or timeout
         # DumpHTTPResponseToLog(Data)
         Response = {}
         currentMessage = self.connections.pop(Connection.Name)
@@ -247,7 +268,7 @@ class IimSlideLocal:
             try:
                 Response = json.loads(strData)
             except:
-                Domoticz.Debug("Invalid response data")
+                Domoticz.Debug("Invalid response data: "+vars(Data))
                 return
 
         Status = int(Data["Status"])
@@ -478,13 +499,16 @@ class IimSlideLocal:
                        "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile)
 
     def onDisconnect(self, Connection):
-        Domoticz.Debug("onDisconnect called: "+Connection.Address)
+        Domoticz.Debug("onDisconnect called: "+Connection.Name + ' messageActive: ' + str(self.messageActive))
+#        self.connections.pop(Connection.Name, None)
+        self.messageActive = False
 
     def onHeartbeat(self):
-        if self.hb == 180:
+        Domoticz.Debug("Connections#: {}".format(len(self.connections.keys())))
+        if self.hb >= self.hbCycles:
             Domoticz.Debug("onHeartbeat called")
-            self.getAllSlidesInfo()
             self.hb = 1
+            self.getAllSlidesInfo()
         else:
             self.hb = self.hb + 1
 
@@ -507,6 +531,9 @@ def onConnect(Connection, Status, Description):
     global _plugin
     _plugin.onConnect(Connection, Status, Description)
 
+def onTimeout(Connection):
+    global _plugin
+    _plugin.onTimeout(Connection)
 
 def onMessage(Connection, Data):
     global _plugin

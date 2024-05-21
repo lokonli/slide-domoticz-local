@@ -12,7 +12,7 @@ You can't use local API and cloud API simultaneously!
 If you activate the local API on your slide the Slide App won't work anymore.
 
 ## Version
-This is beta release 0.2.0. <br/>
+This is beta release 0.3.0. <br/>
 
 ## Slide setup
 First configure your slide using the Slide app for your own WiFi network.
@@ -47,16 +47,15 @@ First activate 'Allow new devices' in Domoticz.
 
 Then add the slide-local hardware in Domoticz.
 
-The plugin uses two configuration fields:
+The plugin uses the following configuration fields:
 
 Slide IP addresses: 1 or more IP addresses, semicolon separated.<br/>
 Device codes: List of device codes, semicolon seperated. Number of codes must match number of IP addresses. Device code is printed on top of your Slide.<br/>
+Refresh time (minutes): Polling time to update slide positions.<br/>
 
 ## Usage
 
-Slide devices will be created automatically.
-
-If you want to calibrate your slide go to the slide UI which can be found in the Custom->Slide screen in Domoticz.
+Slide devices and a calibration device for each slide (push on switch) will be created automatically.
 
 For some more information see the Wiki:
 
