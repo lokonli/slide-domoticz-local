@@ -1,0 +1,4 @@
+rpdb>=0.1.6
+debugpy>=1.6.6
+aiohttp>=3.9
+

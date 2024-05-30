@@ -12,7 +12,7 @@ You can't use local API and cloud API simultaneously!
 If you activate the local API on your slide the Slide App won't work anymore.
 
 ## Version
-This is beta release 0.3.1. <br/>
+This is beta release 0.4. <br/>
 
 ## Slide setup
 First configure your slide using the Slide app for your own WiFi network.
@@ -36,6 +36,8 @@ Go to the Domoticz plugin folder.
 Clone the plugin repository:
 
     git clone https://github.com/lokonli/slide-domoticz-local
+    cd slide-domoticz-local
+    sudo pip3 install -r requirements.txt
 
 Restart Domoticz:
 
@@ -53,6 +55,22 @@ Slide IP addresses: 1 or more IP addresses, semicolon separated.<br/>
 Device codes: List of device codes, semicolon seperated. Number of codes must match number of IP addresses. Device code is printed on top of your Slide.<br/>
 Refresh time (minutes): Polling time to update slide positions.<br/>
 
+### Important: update from version 0.3.1 or earlier
+
+If you are updating from version 0.3.1 or earlier, the Domoticz slide devices have to be recreated.
+
+* Stop the Slide hardware plugin in Domoticz->Setup->Hardware
+* Delete all the Slide devices in Domoticz->Setup->Devices
+* Update the slide plugin:
+
+ ```
+    cd ~/domoticz/plugins/slide-domoticz-local
+    git pull
+    sudo pip3 install -r requirements.txt
+    sudo service domoticz restart
+ ```
+* Enable the Slide hardware plugin in Domoticz->Setup->Hardware
+
 ## Usage
 
 Slide devices and a calibration device for each slide (push on switch) will be created automatically.
@@ -60,6 +78,14 @@ Slide devices and a calibration device for each slide (push on switch) will be c
 For some more information see the Wiki:
 
 https://github.com/lokonli/slide-domoticz-local/wiki
+
+## Release notes
+
+### Version 0.4
+* New version that makes use of the Slide API wrapper by ualex. Don't forget to install the dependencies.
+
+* Setting Touch&Go now is supported.
+* The slide position will now get updated more smoothly within Domoticz.
 
 ## Todo
 
@@ -71,3 +97,5 @@ https://github.com/lokonli/slide-domoticz-local/wiki
 [Domoticz forum](https://www.domoticz.com/forum/viewtopic.php?f=65&t=30449)
 
 https://slide.store/
+
+[Slide API wrapper](https://github.com/ualex73/goslide-api)
