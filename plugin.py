@@ -3,14 +3,14 @@
 # Author: lokonli
 #
 """
-<plugin key="iim-slide-local" name="Slide by Innovation in Motion - Local" author="lokonli" version="0.3.1" wikilink="https://github.com/lokonli/slide-domoticz-local" externallink="https://slide.store/">
+<plugin key="iim-slide-local" name="Slide by Innovation in Motion - Local" author="lokonli" version="0.4" wikilink="https://github.com/lokonli/slide-domoticz-local" externallink="https://slide.store/">
     <description>
         <h2>Slide by Innovation in Motion</h2><br/>
         Plugin for Slide by Innovation in Motion.<br/>
         <br/>
         It uses the Innovation in Motion local API.<br/>
         <br/>
-        This is beta release 0.3.1. <br/>
+        This is beta release 0.4 <br/>
         <br/>
         <h3>Configuration</h3>
         Enable local API by pressing the reset button twice within 0.5 sec.<br/>
@@ -46,7 +46,7 @@
     </params>
 </plugin>
 """
-import Domoticz # type: ignore
+import DomoticzEx as Domoticz # type: ignore
 import json
 from datetime import datetime, timezone
 import time
@@ -56,20 +56,55 @@ from shutil import copy2
 import os
 import os.path
 import re
+import timerqueue
+import threading
+import asyncio
+from goslideapi import GoSlideLocal
+import logging
 
 if False==True:
     Domoticz = {}
     Parameters = {}
     Devices = {}
 
+def dumpJson(name, msg):
+    messageJson = json.dumps(msg,
+                skipkeys = True,
+                allow_nan = True,
+                indent = 6)
+    Domoticz.Debug('Message: '+name )
+    Domoticz.Debug(messageJson)
 class IimSlideLocal:
+
+    DEV_SLIDE = 1
+    DEV_CAL = 2
+    DEV_TG = 3
 
     def __init__(self):
         # 0: Date including timezone info; 1: No timezone info. Workaround for strptime bug
         self._dateType = 0
+        self.commandQueue = timerqueue.TimerQueue()
+        self.tasks=[]
 
     def onStart(self):
         Domoticz.Debug("onStart called")
+        self.debugging=False
+
+        if Parameters["Mode6"] == "-1":
+            Domoticz.Debugging(1)
+            Domoticz.Log("Debugger started, use '0.0.0.0 5678' to connect")
+            import debugpy
+            self.debugging=True
+            self.debugpy=debugpy
+            logging.basicConfig(filename='/var/log/domoticzlog.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s', level=logging.DEBUG)
+            debugpy.listen(("0.0.0.0", 5678))
+##            debugpy.wait_for_client()
+            time.sleep(10)
+#            debugpy.breakpoint()
+        else:
+            Domoticz.Log("onStart called")
+
+
         strVersion = Parameters['DomoticzVersion']
         Domoticz.Log('Version ' + strVersion)
         mainVersion = strVersion.split()[0]
@@ -88,19 +123,74 @@ class IimSlideLocal:
         self.hbCycles = 5
         self.devices = []
         self.deviceMap = {}
-        self.messageQueue = []
-        self.connections = {}
-        self.msgCount = 0
-        self.messageActive = False
         self._tick = 0
         self._dateType = 0
         if Parameters["Mode6"] != "0":
             Domoticz.Debugging(int(Parameters["Mode6"]))
-            DumpConfigToLog()
+#            DumpConfigToLog()
         Domoticz.Debug("Homefolder: {}".format(Parameters["HomeFolder"]))
-        Domoticz.Debug("Length {}".format(len(self.messageQueue)))
         Domoticz.Heartbeat(60)
+        self.messageThread = threading.Thread(name="QueueThread", target=IimSlideLocal.slideThread, args=(self,))
+        self.messageThread.start()
+        Domoticz.Debug('Thread started')
+    
+    def slideThread(self):
+        Domoticz.Debug('Start slide thread')
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        self.goslide = GoSlideLocal()
+        if self.debugging:
+            self.debugpy.breakpoint()
+
         self.initialize()
+
+        while True:
+            try:
+                Message = self.commandQueue.get(block=True)
+                if self.debugging:
+                    self.debugpy.breakpoint()
+
+                if Message is None:
+                    Domoticz.Debug("Exiting message handler")
+                    self.commandQueue.task_done()
+                    break
+
+                dumpJson('Message', Message)
+
+                if (Message["Type"] == "Command"):
+                    deviceID = Message["DeviceID"]
+                    device = self.deviceMap[deviceID]
+                    Command=Message["Command"]
+                    Unit=Message["Unit"]
+                    Level=Message["Level"]
+                    try: 
+                        if Message["Unit"]==IimSlideLocal.DEV_SLIDE:
+                            if (Command == 'Off' or Command == 'Close'):
+                                self.setPosition(device, 0)
+                            if (Command == 'On' or Command == 'Open'):
+                                self.setPosition(device, 1)
+                            if (Command == 'Set Level'):
+                                self.setPosition(device, Level/100)
+                            if (Command == 'Stop'):
+                                self.slideStop(device, Level/100)
+                        elif Unit==IimSlideLocal.DEV_CAL:
+                            if Command == 'On':
+                                self.calibrate(device)
+                        elif Unit==IimSlideLocal.DEV_TG:
+                            self.setTouchGo(device, Command)
+                    except Exception as err:
+                        Domoticz.Error("Command error: "+str(err))
+                elif Message["Type"] == "GetInfo":
+                    self.handleGetInfo(Message['device'])
+                elif Message["Type"] == "GetAllInfo":
+                    self.loop.run_until_complete(self.getAllSlidesInfo())
+                else:
+                    Domoticz.Error('Message not handled.')
+                self.commandQueue.task_done()
+
+            except Exception as err:
+                Domoticz.Error("handleMessage: "+str(err))
+
 
     def initialize(self):
         Domoticz.Debug('initializing')
@@ -116,361 +206,201 @@ class IimSlideLocal:
         
         self.hbCycles = 5 if len(Parameters['Mode4'])==0 else max(int(Parameters['Mode4']),1)
 
-        self.devices = [{'ip': ip, 'code': code, 'nonce': '', 'nc': 0,
-                         'checkMovement': 0, 'Conn': None} for ip, code in zip(ipList, codeList)]
+        self.devices = [{'ip': ip, 'code': code, 'connectionError': False, 'monitorTime':0} for ip, code in zip(ipList, codeList)]
 
         Domoticz.Debug(json.dumps(self.devices, indent=4))
-        self.getAllSlidesInfo()
+        self.addSlides()
+        self.loop.run_until_complete(self.getAllSlidesInfo())
 
     def onStop(self):
         Domoticz.Debug("onStop called")
 
-    def addMessageToQueue(self, cmd):
-        Domoticz.Debug("addMessageToQueue: " +str(cmd))
-        cmd['authorizationError'] = False
-        self.messageQueue.append(cmd)
-        if not self.messageActive:
-            self.sendMessageFromQueue()
-        else:
-            Domoticz.Debug("Sending postponed, queue len: " + str(len(self.messageQueue)))
+        self.commandQueue.put(None)
+        self.commandQueue.join()
 
+        Domoticz.Debug('Threads still active: {} (should be 1)'.format(threading.active_count()))
+        endTime = time.time() + 70
+        while (threading.active_count() > 1) and (time.time() < endTime):
+            for thread in threading.enumerate():
+                if thread.name != threading.current_thread().name:
+                    Domoticz.Debug('Thread {} is still running, waiting otherwise Domoticz will abort on plugin exit.'.format(thread.name))
+            time.sleep(1.0)
 
-    def sendMessageFromQueue(self):
-        if len(self.messageQueue) == 0:
-            return
-        self.connect(self.messageQueue.pop(0))
+        Domoticz.Debug('Plugin stopped - Threads still active: {} (should be 1)'.format(threading.active_count()))
 
-    def connect(self, msg):
-        Domoticz.Debug("connect called" + str(msg))
-        self.messageActive = True
-        address = msg["device"]["ip"]
-        self.msgCount = self.msgCount + 1 if self.msgCount < 9999 else 0
-        
-        connectionName = 'Slide_'+address+'_'+str(self.msgCount)
-#        if connectionName not in self.connections:
-#            self.connections[connectionName] = []	# initialise the connections list that holds the commands
-#        self.connections[connectionName].append(msg)	# add the message to the list
-        self.connections[connectionName] = msg
-        self.connection = Domoticz.Connection(
-            Name=connectionName, Transport="TCP/IP", Protocol="HTTP", Address=address, Port="80")
-        self.connection.Connect(Timeout=1000)
-        return
-
-        for dev in self.devices:
-            if dev['ip'] == address:
-                if dev['Conn'] == None:
-                    Domoticz.Debug("Creating connection for address " + address)
-                    dev['Conn'] = Domoticz.Connection(
-                        Name=connectionName, Transport="TCP/IP", Protocol="HTTP", Address=address, Port="80")
-                    dev['Conn'].Connect()
-                    return
-                else:
-                    if dev['Conn'].Connected() or dev['Conn'].Connecting():
-                        Domoticz.Debug("Connection (being) created " + address)
-                        return
-                    else:
-                        Domoticz.Debug("Connecting address " + address)
-                        dev['Conn'].Connect()
-                        return
-
-        Domoticz.Error("Error: connection for IP not found " + address)
-
-    def onConnect(self, Connection, Status, Description):
-        Domoticz.Debug("onConnect called: " + Connection.Address + " " + Connection.Name + " connected: " + str(Connection.Connected()) + " connecting: " + str(Connection.Connecting()))
-
-        currentMessage = self.connections[Connection.Name] if Connection.Name in self.connections else None
-        Domoticz.Debug("onConnect message is: " + str(currentMessage))
-
-        if (Status == 0):
-            Domoticz.Debug("Slide connected successfully: "+Connection.Address+" "+Connection.Name)
-        else:
-            Domoticz.Error("Failed to connect ("+str(Status)+") to: " +
-                           currentMessage["device"]["ip"]+" with error: "+Description)
-            return
-
-        if Connection.Name in self.connections:
-            self.sendMessage(Connection)
-        else:
-            Domoticz.Error('Connection without info')
-    
-    def onTimeout(self, Connection):
-        Domoticz.Debug("Timeout for: "+Connection.Name)
-        self.messageActive = False
-        self.connections.pop(Connection.Name, None)
-        self.sendMessageFromQueue()
-
-
-    def sendMessage(self, connection):
-        currentMessage = self.connections[connection.Name]
-        Domoticz.Debug("sendMessagecalled. CurrentMessage: " + str(currentMessage))
-        _device = currentMessage["device"]
-        username = 'user'
-        realm = 'iim'
-        password = _device["code"]
-
-        part1 = md5((username + ':' + realm + ':' +
-                     password).encode("utf-8")).hexdigest()
-        Domoticz.Debug('Part 1: '+part1)
-
-        cmd = 'POST'
-        uri = currentMessage["uri"]
-        part2 = md5((cmd + ':' + uri).encode("utf-8")).hexdigest()
-        Domoticz.Debug('Part 2: '+part2)
-
-        nonce = _device["nonce"]
-        nc = format(_device["nc"], '08')
-        _device["nc"] += 1
-        cnonce = 'abcdef0123456789'
-        qop = 'auth'
-
-        response = md5((part1 + ':' + nonce + ':' + nc + ':' + cnonce +
-                        ':' + qop + ':' + part2).encode("utf-8")).hexdigest()
-
-# 'Authorization: Digest username="user",
-# realm="iim", nonce="5f4031e1",
-# uri="/rpc/Slide.GetInfo",
-# algorithm="MD5",
-# qop=auth, nc=00000001,
-# cnonce="abcdef0123456789",
-# response="258bc1b41e0b9d70bea4f0a204d85593"'
-        sendData = {
-            'Verb': 'POST',
-            'Headers': {'Content-Type': 'application/json',
-                        #                        'Host': 'api.goslide.io',
-                        'Accept': 'application/json',
-                        #                        'X-Requested-With': 'XMLHttpRequest',
-                        'Authorization': 'Digest username="' + username + '", ' +
-                        'realm="'+realm+'", ' +
-                        'nonce="'+nonce + '", ' +
-                        'uri="' + uri + '", ' +
-                        'algorithm="MD5", qop=' + qop + ', ' +
-                        'nc='+nc+', ' +
-                        'cnonce="' + cnonce + '", ' +
-                        'response="' + response + '"'
-                        },
-            'URL': uri,
-            'Data': currentMessage["data"]  # json.dumps({"pos": str(level)})
-        }
-        delay = currentMessage["delay"] if 'delay' in currentMessage else 0
-
-        Domoticz.Debug("Sending: "+json.dumps(sendData))
-        connection.Send(sendData, delay)
-
-    def onMessage(self, Connection, Data):
-        Domoticz.Debug("onMessage called: "+Connection.Address+" "+Connection.Name)
-        # self.messageActive = False # not here, but in disconnect or timeout
-        # DumpHTTPResponseToLog(Data)
-        Response = {}
-        currentMessage = self.connections.pop(Connection.Name)
-        if "Data" in Data:
-            strData = Data["Data"].decode("utf-8", "ignore")
-            try:
-                Response = json.loads(strData)
-            except:
-                Domoticz.Debug("Invalid response data: "+vars(Data))
-                return
-
-        Status = int(Data["Status"])
-        retry = False
-
-        Domoticz.Debug(json.dumps(Response))
-
-        if (Status == 200):
-            Domoticz.Debug("Good Response received from IIM: "+Connection.Address+" "+Connection.Name)
-            currentMessage['authorizationError'] = False
-        elif (Status == 401):
-            Domoticz.Debug("Authorization error: "+Connection.Address+" "+Connection.Name)
-            if currentMessage['authorizationError']:
-                Domoticz.Error("Digest Authorization error.")
-                currentMessage['authorizationError'] = False
-            else:
-                currentMessage['authorizationError'] = True
-                Domoticz.Debug(Connection.Address+": "+json.dumps(Data))
-                Domoticz.Debug('Header: '+Data['Headers']['WWW-Authenticate'])
-                # after an Authorization Error we set nc to 0 to restart counting
-                currentMessage["device"]["nc"] = 0
-                auth = Data['Headers']['WWW-Authenticate']
-                import re
-
-                reg = re.compile('(\w+)[=] ?"?(\w+)"?')
-
-                authDict = dict(reg.findall(auth))
-                Domoticz.Debug(Connection.Address+": "+json.dumps(authDict))
-
-#                self.currentMessage["device"]["nonce"]=authDict["nonce"]
-                currentMessage["device"]['nonce'] = authDict["nonce"]
-                self.messageActive = True
-                self.connect(currentMessage)  # resend, by reconnect
-                retry = True
-        else:
-            Domoticz.Debug("IIM returned a status: "+str(Status))
-
-        if retry:  # We have resend the connect, so let's return
-            return
-
-        updated = False
-
-        if "pos" in Response:
-            id = Response["slide_id"]
-            pos = Response["pos"]
-            currentMessage['device']['slide_id'] = id
-#            self.updateStatusDeviceDescription()
-            self.deviceMap[id] = currentMessage['device']
-
-            Domoticz.Debug('Searching for device {}'.format(id))
-
-            found = False
-            for idx in Devices:
-                device = Devices[idx]
-                if device.DeviceID == id:
-                    Domoticz.Debug('Device exists')
-                    found = True
-                    if self.setStatus(device, pos):
-                        updated = True
-                    break
-            if not found:
-                # During installation of Slide the name is null
-                name = Response["slide_id"]
-                if Response["device_name"] != None and Response["device_name"] != "":
-                    name = Response["device_name"]
-                Domoticz.Log(
-                    'New slide found: {}, device ID {}'.format(name, str(id)))
-
-                unit = findFirstFreeUnit()
-
-                switchType = 21 if self.nVersion>=1 else 13
-                myDev = Domoticz.Device(Name=name, Unit=unit, DeviceID='{}'.format(
-                    id), Type=244, Subtype=73, Switchtype=switchType, Used=1)
-                myDev.Create()
-                self.setStatus(myDev, pos)
-
-                self.createCalibrationSwitch(id)
-
-            _device = currentMessage['device']
-            _device["checkMovement"] = max(_device["checkMovement"]-1, 0)
-            if updated or (_device["checkMovement"] > 0):
-                Domoticz.Debug('Check movement for slide {}'.format(id))
-                self.getSlideInfo(_device, 1)
-
-        self.sendMessageFromQueue()
-    
-    def createCalibrationSwitch(self, id):
-        Domoticz.Debug('Check calibration switch for {}'.format(id))
-        calibrationID = id + '_cal'
-        found = False
-        for idx in Devices: 
-            device = Devices[idx]
-            if device.DeviceID ==calibrationID:
-                Domoticz.Debug('Calibration switch exists')
-                found = True
-                break
-        if not found:
-            Domoticz.Debug('Create calibration switch')
-            unit = findFirstFreeUnit()
-            name = 'Calibrate ' + id
-            Domoticz.Device(Name=name, Unit=unit, DeviceID=calibrationID, Type=244, Subtype=73, Switchtype=9, Used=1).Create()
-
-
-
-    def getAllSlidesInfo(self, delay=0):
+    def addSlides(self):
         for device in self.devices:
-            self.getSlideInfo(device, delay)
+            api = 2 if len(device["code"])==0 else 1
+            self.loop.run_until_complete(self.goslide.slide_add(device["ip"],device["code"],api ))
 
-    def getSlideInfo(self, device, delay=0):
-        Domoticz.Debug('Get Slide info: ')
-#        Domoticz.Debug(json.dumps(device))
-        Domoticz.Debug("getSLideInfo: "+str(device))
-        cmd = {
-            'device': device,
-            'uri': '/rpc/Slide.GetInfo',
-            'data': '',
-            'delay': delay
-        }
-        self.addMessageToQueue(cmd)
+    async def getAllSlidesInfo(self, delay=0):
+        await asyncio.gather(*[self.getSlideInfo(device, delay) for device in self.devices])
+        return None
 
-    def calibrate(self, device):
-        Domoticz.Debug('Calibrate ' + device['slide_id'])
-        cmd = {
-            'device': device,
-            'uri': '/rpc/Slide.Calibrate',
-            'data': ''
-        }
-        self.addMessageToQueue(cmd)
+    async def getSlideInfo(self, device, delay=0):
+        Domoticz.Debug("getSlideInfo: "+str(device))
+        try:
+            device["slide"] = await self.goslide.slide_info(device["ip"])
+            self.deviceMap[device["slide"]["slide_id"]] = device
+            Domoticz.Debug(json.dumps(device))
+            if device["slide"] != None:
+                if device['connectionError']:
+                    device['connectionError'] = False
+                    Domoticz.Debug(f"Device {device['ip']} reconnected.")
+                self.updateSlide(device)
+        except:
+            if not device['connectionError']:
+                device['connectionError'] = True
+                Domoticz.Debug(f"Device {device['ip']} not connected.")
 
-    def setStatus(self, device, pos):
-        Domoticz.Debug("setStatus called with pos:" + str(pos))
+        return None
+
+    def updateSlide(self, device):
+        id = device["slide"]["slide_id"]
+
+        switchType = 21 if self.nVersion>=1 else 13
+
+        defaultUnits = [
+            { #1
+                "Unit": self.DEV_SLIDE,
+                "Name": "Slide "+id,
+                "Type": 244,
+                "Subtype": 73,
+                "Switchtype": switchType,
+            },
+            { #2
+                "Unit": self.DEV_CAL,
+                "Name": "Calibrate "+id,
+                "Type": 244,
+                "Subtype": 73,
+                "Switchtype": 9,
+            },
+            { #3
+                "Unit": self.DEV_TG,
+                "Name": "Touch&Go "+id,
+                "Type": 244,
+                "Subtype": 73,
+                "Switchtype": 0,
+            },
+        ]
+
+        try:
+            slide=Devices[id]
+            for defaultUnit in defaultUnits:
+                unit = defaultUnit["Unit"]
+                if unit in slide.Units:
+                    myUnit = slide.Units[unit]
+                else:
+                    myUnit = Domoticz.Unit(DeviceID=id, Used=1, **defaultUnit)
+                    myUnit.Create()
+        except:
+            for defaultUnit in defaultUnits:
+                myUnit = Domoticz.Unit(DeviceID=id, Used=1, **defaultUnit)
+                myUnit.Create()
+        if self.updateSlidePos(device):
+            self.monitorPosition(device,1)
+        self.updateTouchGo(device)
+
+    def updateSlidePos(self, device):    
+        id = device["slide"]["slide_id"]
+        pos=device["slide"]["pos"]
         sValue = str(int(pos*100))
         nValue = 2
 #        if pos < 0.13:
+        unit = Devices[id].Units[self.DEV_SLIDE]
         nPos = 1- pos if self.nVersion >= 1 else pos
         sValue = str(int(nPos*100))
-        if nPos < 0.13:
+        if nPos < 0.1:
             nValue = 0
             sValue = '0'
-        if nPos > 0.87:
+        if nPos > 0.9:
             nValue = 1
             sValue = '100'
-        if(device.sValue != sValue):
+
+        if self.debugging:
+            self.debugpy.breakpoint()
+
+        if(unit.sValue != sValue):
             Domoticz.Debug('Update position from {} to {}'.format(
-                device.sValue, sValue))
-            device.Update(nValue=nValue, sValue=sValue)
+                unit.sValue, sValue))
+            unit.nValue=nValue
+            unit.sValue=sValue
+            unit.Update(Log=True)
             return True
         else:
             return False
-# New Domoticz versions
-#- 0 = Blind Close in GUI/dzvents
-#- 100 = Blind Open in GUI/dzvents
-#- 90 = Show 90 in the GUI/dzvents, Send 90 to the device (Blind almost fully Open)
-#- 10 = Show 10 in the GUI/dzvents, Send 10 to the device (Blind almost fully Closed)
+    
+    def updateTouchGo(self, device):
+        id = device["slide"]["slide_id"]
+        tg = device["slide"]["touch_go"]
+        unit = Devices[id].Units[self.DEV_TG]
+        unitTG = unit.nValue == 1
+        if tg!=unitTG:
+            unit.nValue = 1 if tg else 0
+            unit.Update(Log=True)
+            return True
+        else:
+            return False
 
-    def onCommand(self, Unit, Command, Level, Hue):
-        Domoticz.Debug("onCommand called for Unit " + str(Unit) +
-                       ": Parameter '" + str(Command) + "', Level: " + str(Level))
-        if Unit>200:
-            cmdArray = Command.split()
-            if len(cmdArray) != 3:  #Command should contain three words: On calibrate <slide_id>
-                Domoticz.Error('Incorrect command')
-                return
-            cmd = cmdArray[1]
-            device = cmdArray[2]
-            Domoticz.Debug('Special command: ' + cmd + ' unit ' + device)
-            if cmd=='calibrate':
-                self.calibrate(self.getDevice(device))
-            else:
-                Domoticz.Error('Unsupported command: ' + cmd)
-                return
-            return
-        if (Command == 'Off' or Command == 'Close'):
-            self.setPosition(Devices[Unit].DeviceID, 0)
-        if (Command == 'On'):
-            if right(Devices[Unit].DeviceID,3)=='cal':
-                deviceID = Devices[Unit].DeviceID[:len(Devices[Unit].DeviceID)-4]
-                self.calibrate(self.getDevice(deviceID))
-                return
-            self.setPosition(Devices[Unit].DeviceID, 1)
-        if (Command == 'Open'):
-            self.setPosition(Devices[Unit].DeviceID, 1)
-        if (Command == 'Set Level'):
-            self.setPosition(Devices[Unit].DeviceID, Level/100)
-        if (Command == 'Stop'):
-            self.slideStop(Devices[Unit].DeviceID, Level/100)
+    def onCommand(self, DeviceID, Unit, Command, Level, Color):
+        Domoticz.Log("onCommand called for Device " + str(DeviceID) + " Unit " + str(Unit) + ": Parameter '" + str(Command) + "', Level: " + str(Level))
+        self.commandQueue.put(
+            {"Type":"Command", 
+             "DeviceID": DeviceID,
+             "Unit": Unit,
+             "Command": Command,
+             "Level": Level
+            })
 
-    def setPosition(self, id, level):
+    def setPosition(self, device, level):
+        if self.debugging:
+            self.debugpy.breakpoint()
+        hostname = device["ip"]
         Domoticz.Debug("setPosition called")
         Domoticz.Debug("Nversion "+ str(self.nVersion))
-        nLevel = 1-level if self.nVersion >= 1 else level
-        Domoticz.Debug("nLevel " + str(nLevel))
-        device = self.getDevice(id)
-        if device == None:
-            return
-        sendData = {'uri': '/rpc/Slide.SetPos',
-                    'data': json.dumps({"pos": str(nLevel)}),
-                    'device': device
-                    }
-        device["checkMovement"] = min(device["checkMovement"]+1, 2)
-        self.addMessageToQueue(sendData)
-        if device["checkMovement"] == 1:
-            self.getSlideInfo(device, 2)
+        nLevel = 1-level if self.nVersion == 1 else level
+        self.loop.run_until_complete(self.goslide.slide_set_position(hostname, nLevel ))
+        self.getInfoDelayed(device, 2)
+
+    def getInfoDelayed(self, device, delay):
+        Domoticz.Debug('getInfoDelayed called')
+        if self.debugging:
+            self.debugpy.breakpoint()
+        self.commandQueue.put({
+            "Type":"GetInfo", 
+            "device": device,
+           }, delay)
+
+    def monitorPosition(self, device, delay):
+        """ Start polling monitor position for next {delay} seconds """
+
+        Domoticz.Debug('monitorPosition called')
+        endTime=time.monotonic() + delay
+        monitoring = device['monitorTime'] > 0
+        if endTime > device['monitorTime']:
+            device['monitorTime'] = endTime
+        if not monitoring:
+            self.getInfoDelayed(device,1)
+
+    def handleGetInfo(self, device):
+        Domoticz.Debug('GetInfo called, delayed command')
+        self.loop.run_until_complete(self.getSlideInfo(device))
+        if device['monitorTime'] > time.monotonic():
+            self.getInfoDelayed(device,1)
+        else:
+            device['monitorTime'] = 0
+
+    def setTouchGo(self, device, command):
+        Domoticz.Debug('set_touch_go '+command)
+        hostname = device["ip"]
+        nLevel = command=='On'
+        self.loop.run_until_complete(self.goslide.slide_set_touchgo(hostname, nLevel ))
+        self.getInfoDelayed(device,0.1)
+
+    def calibrate(self, device):
+        hostname = device["ip"]
+        self.loop.run_until_complete(self.goslide.slide_calibrate(hostname))
+        self.monitorPosition(device,3)
 
     def getDevice(self, id):
         Domoticz.Debug('getDevice called for ' + id)
@@ -481,33 +411,21 @@ class IimSlideLocal:
             Domoticz.Debug(json.dumps(self.deviceMap))
             return None
 
-    def slideStop(self, id, level):
+    def slideStop(self, device, level):
         Domoticz.Debug("slideStop called")
-        device = self.getDevice(id)
         if device == None:
             return
-        cmd = {
-            'device': device,
-            'uri': '/rpc/Slide.Stop',
-            'data': ''
-        }
-        self.addMessageToQueue(cmd)
-
-    def onNotification(self, Name, Subject, Text, Status, Priority, Sound, ImageFile):
-        Domoticz.Debug("Notification: " + Name + "," + Subject + "," + Text +
-                       "," + Status + "," + str(Priority) + "," + Sound + "," + ImageFile)
-
-    def onDisconnect(self, Connection):
-        Domoticz.Debug("onDisconnect called: "+Connection.Name + ' messageActive: ' + str(self.messageActive))
-#        self.connections.pop(Connection.Name, None)
-        self.messageActive = False
+        hostName = device["ip"]
+        self.loop.run_until_complete(self.goslide.slide_stop(hostName))
+        self.monitorPosition(device,1)
 
     def onHeartbeat(self):
-        Domoticz.Debug("Connections#: {}".format(len(self.connections.keys())))
         if self.hb >= self.hbCycles:
             Domoticz.Debug("onHeartbeat called")
             self.hb = 1
-            self.getAllSlidesInfo()
+            self.commandQueue.put(
+                {"Type":"GetAllInfo", 
+                })
         else:
             self.hb = self.hb + 1
 
@@ -515,45 +433,17 @@ class IimSlideLocal:
 global _plugin
 _plugin = IimSlideLocal()
 
-
 def onStart():
     global _plugin
     _plugin.onStart()
-
 
 def onStop():
     global _plugin
     _plugin.onStop()
 
-
-def onConnect(Connection, Status, Description):
+def onCommand(DeviceID, Unit, Command, Level, Color):
     global _plugin
-    _plugin.onConnect(Connection, Status, Description)
-
-def onTimeout(Connection):
-    global _plugin
-    _plugin.onTimeout(Connection)
-
-def onMessage(Connection, Data):
-    global _plugin
-    _plugin.onMessage(Connection, Data)
-
-
-def onCommand(Unit, Command, Level, Hue):
-    global _plugin
-    _plugin.onCommand(Unit, Command, Level, Hue)
-
-
-def onNotification(Name, Subject, Text, Status, Priority, Sound, ImageFile):
-    global _plugin
-    _plugin.onNotification(Name, Subject, Text, Status,
-                           Priority, Sound, ImageFile)
-
-
-def onDisconnect(Connection):
-    global _plugin
-    _plugin.onDisconnect(Connection)
-
+    _plugin.onCommand(DeviceID, Unit, Command, Level, Color)
 
 def onHeartbeat():
     global _plugin
@@ -561,10 +451,8 @@ def onHeartbeat():
 
     # Generic helper functions
 
-
 def LogMessage(Message):
     Domoticz.Debug(Message)
-
 
 def DumpConfigToLog():
     for x in Parameters:
@@ -579,35 +467,3 @@ def DumpConfigToLog():
         Domoticz.Debug("Device sValue:   '" + Devices[x].sValue + "'")
         Domoticz.Debug("Device LastLevel: " + str(Devices[x].LastLevel))
     return
-
-
-def DumpHTTPResponseToLog(httpResp, level=0):
-    if (level == 0):
-        Domoticz.Debug("HTTP Details ("+str(len(httpResp))+"):")
-    indentStr = ""
-    for x in range(level):
-        indentStr += "----"
-    if isinstance(httpResp, dict):
-        for x in httpResp:
-            if not isinstance(httpResp[x], dict) and not isinstance(httpResp[x], list):
-                Domoticz.Debug(indentStr + ">'" + x +
-                               "':'" + str(httpResp[x]) + "'")
-            else:
-                Domoticz.Debug(indentStr + ">'" + x + "':")
-                DumpHTTPResponseToLog(httpResp[x], level+1)
-    elif isinstance(httpResp, list):
-        for x in httpResp:
-            Domoticz.Debug(indentStr + "['" + x + "']")
-    else:
-        Domoticz.Debug(indentStr + ">'" + x + "':'" + str(httpResp[x]) + "'")
-
-def findFirstFreeUnit():
-    # find first free unit
-    units = list(range(1, len(Devices)+2))
-    for device in Devices:
-        if device in units:
-            units.remove(device)
-    return min(units)
-
-def right(s, amount):
-    return s[-amount:]
